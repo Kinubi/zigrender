@@ -1,0 +1,3 @@
+[submodule "vendor/NRI"]
+	path = vendor/NRI
+	url = https://github.com/NVIDIA-RTX/NRI.git
