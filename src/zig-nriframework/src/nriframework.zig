@@ -166,6 +166,13 @@ pub const NRIInterface = struct {
     raytracing: c.NriRayTracingInterface,
 };
 
+pub const NriTopLevelInstance = extern struct {
+    transform: [3][4]f32,
+    instanceId_mask: u32,
+    sbtOffset_flags: u32,
+    accelerationStructureHandle: u64,
+};
+pub const NRI_TOP_LEVEL_INSTANCE_SIZE = @sizeOf(NriTopLevelInstance);
 /// Get all NRI interfaces for a device
 pub fn getInterfaces(device: *c.NriDevice, out: *NRIInterface) !void {
     if (c.nriGetInterface(device, "nri::CoreInterface", @sizeOf(c.NriCoreInterface), &out.core) != c.NriResult_SUCCESS)
@@ -209,56 +216,6 @@ pub fn sampleMain(
     // TODO: Add cleanup for device, swapchain, Imgui, and other resources
 }
 
-pub fn createNriDeviceAndSwapchain(window: *wayland.WaylandWindow) !void {
-    // 1. Enumerate adapters
-
-    var adapterDescs: [8]c.NriAdapterDesc = undefined;
-    var adapterDescNum: u32 = 8;
-    if (c.nriEnumerateAdapters(&adapterDescs, &adapterDescNum) != c.NriResult_SUCCESS or adapterDescNum == 0)
-        return error.NRIAdapterEnumerationFailed;
-
-    // 2. Create NRI device (Vulkan backend)
-    var device: ?*c.NriDevice = null;
-    var deviceDesc = c.NriDeviceCreationDesc{
-        .graphicsAPI = c.NriGraphicsAPI_VK,
-        .enableGraphicsAPIValidation = true,
-        .enableNRIValidation = true,
-        .adapterDesc = &adapterDescs[0],
-    };
-    if (c.nriCreateDevice(&deviceDesc, &device) != c.NriResult_SUCCESS or device == null)
-        return error.NRIDeviceCreationFailed;
-    defer c.nriDestroyDevice(device);
-
-    // 3. Create swapchain for the window
-    const nri_window = c.NriWindow{ .wayland = .{
-        .display = c.glfwGetWaylandDisplay(),
-        .surface = c.glfwGetWaylandWindow(@ptrCast(window.handle)),
-    } };
-
-    var swapChainDesc = c.NriSwapChainDesc{
-        .window = nri_window,
-        .width = @intCast(window.width),
-        .height = @intCast(window.height),
-        .verticalSyncInterval = 0,
-        .format = c.NriFormat_RGBA8_UNORM,
-    };
-    var swapChain: ?*c.NriSwapChain = null;
-
-    // 1. Get the SwapChain interface
-    var swapChainInterface: c.NriSwapChainInterface = undefined;
-    if (c.nriGetInterface(device, "nri::SwapChainInterface", @sizeOf(c.NriSwapChainInterface), &swapChainInterface) != c.NriResult_SUCCESS)
-        return error.NRISwapChainInterfaceFailed;
-
-    // 2. Create the swapchain using the interface
-    if (swapChainInterface.CreateSwapChain.?(device, &swapChainDesc, &swapChain) != c.NriResult_SUCCESS or swapChain == null)
-        return error.NRISwapChainCreationFailed;
-    defer swapChainInterface.DestroySwapChain.?(swapChain);
-
-    // Present a blank frame (black)
-    _ = swapChainInterface.AcquireNextTexture.?(swapChain, null, null);
-    _ = swapChainInterface.QueuePresent.?(swapChain, null);
-}
-
 pub fn createDevice(adapter_index: u32, enable_api_validation: bool, enable_nri_validation: bool) !*c.NriDevice {
     var adapterDescs: [8]c.NriAdapterDesc = undefined;
     var adapterDescNum: u32 = 8;
@@ -270,6 +227,7 @@ pub fn createDevice(adapter_index: u32, enable_api_validation: bool, enable_nri_
         .enableGraphicsAPIValidation = enable_api_validation,
         .enableNRIValidation = enable_nri_validation,
         .adapterDesc = &adapterDescs[adapter_index],
+        .vkBindingOffsets = c.NriVKBindingOffsets{},
     };
     if (c.nriCreateDevice(&deviceDesc, &device) != c.NriResult_SUCCESS or device == null)
         return error.NRIDeviceCreationFailed;
@@ -279,21 +237,21 @@ pub fn createDevice(adapter_index: u32, enable_api_validation: bool, enable_nri_
 pub fn createSwapChain(iface: *const c.NriSwapChainInterface, device: *c.NriDevice, window: *wayland.WaylandWindow, queue: ?*c.NriQueue, width: u32, height: u32, format: u32, vsync: u32) !*c.NriSwapChain {
     // Ensure window.handle is valid and surface is not null
     if (window.handle == null) return error.InvalidWindowHandle;
-    const surface = c.glfwGetWaylandWindow(@ptrCast(window.handle));
-    std.debug.print("GLFW handle: {any}, Wayland surface: {any}\n", .{ window.handle, surface });
-    if (surface == null) return error.InvalidWaylandSurface;
-    const nri_window = c.NriWindow{ .wayland = .{
-        .display = c.glfwGetWaylandDisplay(),
-        .surface = surface,
-    } };
+
+    // Convert Zig NRIWindow to C NriWindow
+    var c_window: c.struct_NriWindow = undefined;
+    c_window.wayland.display = window.nri_window.display;
+    c_window.wayland.surface = window.nri_window.surface;
+
     var swapChainDesc = c.NriSwapChainDesc{
-        .window = nri_window,
+        .window = c_window,
         .queue = queue,
         .width = @intCast(width),
         .height = @intCast(height),
         .verticalSyncInterval = @intCast(vsync),
         .format = @intCast(format),
-        .textureNum = 2,
+        .textureNum = 3,
+        .queuedFrameNum = 2,
     };
     var swapChain: ?*c.NriSwapChain = null;
     if (iface.CreateSwapChain.?(device, &swapChainDesc, &swapChain) != c.NriResult_SUCCESS or swapChain == null)
@@ -317,6 +275,10 @@ pub fn createFence(core: *const c.NriCoreInterface, device: *c.NriDevice, initia
 }
 
 pub fn acquireNextTexture(swapchain: *const c.NriSwapChainInterface, swap_chain: *c.NriSwapChain, acquire_semaphore: ?*c.NriFence, out_index: *u32) !void {
+    std.debug.print("AcquireNextTexture ptr: {any}\n", .{swapchain.AcquireNextTexture});
+    std.debug.print("swap_chain ptr: {any}\n", .{swap_chain});
+    std.debug.print("acquire_semaphore ptr: {any}\n", .{acquire_semaphore});
+    std.debug.print("out_index ptr: {any}\n", .{out_index});
     if (swapchain.AcquireNextTexture.?(swap_chain, acquire_semaphore, out_index) != c.NriResult_SUCCESS)
         return error.NRIAcquireNextTextureFailed;
 }
