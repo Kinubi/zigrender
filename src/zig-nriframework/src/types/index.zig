@@ -1,5 +1,11 @@
 const std = @import("std");
 
+// Type aliases for framework compatibility
+pub const Fence = opaque {};
+pub const Texture = opaque {};
+pub const Descriptor = opaque {};
+pub const Format = u32;
+
 pub const Key = enum {
     A,
     B,
@@ -48,11 +54,11 @@ pub const uint2 = struct {
 };
 
 pub const SwapChainTexture = struct {
-    acquireSemaphore: *nri.Fence,
-    releaseSemaphore: *nri.Fence,
-    texture: *nri.Texture,
-    colorAttachment: *nri.Descriptor,
-    attachmentFormat: nri.Format,
+    acquireSemaphore: *Fence,
+    releaseSemaphore: *Fence,
+    texture: *Texture,
+    colorAttachment: *Descriptor,
+    attachmentFormat: Format,
 };
 
 pub const VKBindingOffsets = struct {

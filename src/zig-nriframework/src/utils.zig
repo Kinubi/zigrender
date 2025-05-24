@@ -6,7 +6,7 @@ const std = @import("std");
 pub fn toUpperCase(input: []const u8) ![]u8 {
     var allocator = std.heap.page_allocator;
     var result = try allocator.alloc(u8, input.len);
-    for (inputIndex, char) in input {
+    for (input, 0..) |char, inputIndex| {
         result[inputIndex] = if (char >= 'a' and char <= 'z') char - 32 else char;
     }
     return result;
@@ -31,6 +31,6 @@ pub fn lerp(a: f32, b: f32, t: f32) f32 {
 
 // Function to generate a random float between min and max
 pub fn randomFloat(min: f32, max: f32) f32 {
-    var prng = std.rand.DefaultPrng.init(@intCast(u64, std.time.timestamp()));
+    var prng = std.rand.DefaultPrng.init(@as(u64, std.time.timestamp()));
     return min + (prng.random().float(f32) * (max - min));
 }

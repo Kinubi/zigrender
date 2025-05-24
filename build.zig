@@ -74,6 +74,7 @@ pub fn build(b: *std.Build) !void {
     // Link system libraries if needed
     exe.linkSystemLibrary("vulkan");
     exe.linkLibC();
+    exe.linkSystemLibrary("glfw");
     const libstdcxx_names: []const []const u8 = &.{
         "libstdc++.so",
         "libstdc++.a",
