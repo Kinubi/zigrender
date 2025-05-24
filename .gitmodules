@@ -1,6 +1,3 @@
-[submodule "vendor/NRI"]
-	path = vendor/NRI
-	url = https://github.com/Kinubi/NRI.git
 [submodule "vendor/NRIFramework"]
 	path = vendor/NRIFramework
 	url = https://github.com/Kinubi/NRIFramework.git
