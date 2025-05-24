@@ -5,20 +5,16 @@ pub fn build(b: *std.build.Builder) void {
     const target = b.getTarget();
     const output_dir = b.path("zig-nriframework");
 
-    const exe = b.addExecutable("nriframework", "src/main.zig");
-    exe.setBuildMode(mode);
-    exe.setTarget(target);
-    exe.setOutputDir(output_dir);
-    
-    // Add source files
-    exe.addSourceFile("src/nriframework.zig", "");
-    exe.addSourceFile("src/camera.zig", "");
-    exe.addSourceFile("src/controls.zig", "");
-    exe.addSourceFile("src/helper.zig", "");
-    exe.addSourceFile("src/timer.zig", "");
-    exe.addSourceFile("src/utils.zig", "");
-    exe.addSourceFile("src/types/index.zig", "");
+    const lib = b.addStaticLibrary("nriframework", "src/nriframework.zig");
+    lib.setBuildMode(mode);
+    lib.setTarget(target);
+    lib.setOutputDir(output_dir);
+    lib.addSourceFile("src/camera.zig", "");
+    lib.addSourceFile("src/controls.zig", "");
+    lib.addSourceFile("src/helper.zig", "");
+    lib.addSourceFile("src/timer.zig", "");
+    lib.addSourceFile("src/utils.zig", "");
+    lib.addSourceFile("src/types/index.zig", "");
 
-    // Set the executable to be built
-    b.default_step.dependOn(&exe.step);
+    b.installArtifact(lib);
 }

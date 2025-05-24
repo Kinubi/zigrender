@@ -34,6 +34,17 @@ pub fn build(b: *std.Build) !void {
     const nriframework_include = "vendor/NRIFramework/Include";
     const nri_include = "vendor/NRIFramework/External/NRI/Include"; // NRI headers as built by NRIFramework
 
+    // Build zig-nriframework as a static library
+    const nriframework_lib = b.addStaticLibrary(.{
+        .name = "nriframework",
+        .root_source_file = b.path("src/zig-nriframework/src/nriframework.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    nriframework_lib.addIncludePath(b.path("src/zig-nriframework/src"));
+    // Remove all addSourceFile calls; rely on @import in nriframework.zig
+    b.installArtifact(nriframework_lib);
+
     // Main Zig executable or library
     const exe = b.addExecutable(.{
         .name = "main",
@@ -41,6 +52,7 @@ pub fn build(b: *std.Build) !void {
         .target = target,
         .optimize = optimize,
     });
+    exe.linkLibrary(nriframework_lib);
 
     // Make sure NRIFramework (and thus NRI) is built before linking
     exe.step.dependOn(&nriframework_build_step.step);

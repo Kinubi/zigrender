@@ -1,20 +1,14 @@
 const std = @import("std");
-
-const nri = @cImport({
-    @cInclude("stddef.h");
-    @cInclude("NRI.h");
-    @cInclude("Extensions/NRIDeviceCreation.h");
-    @cInclude("Extensions/NRIHelper.h");
-    @cInclude("Extensions/NRIResourceAllocator.h");
-});
+const wayland = @import("zig-nriframework/src/wayland_window.zig");
 
 pub fn main() !void {
-    var device: ?*nri.NriDevice = null;
-    var adapterDescs: [2]nri.NriAdapterDesc = .{ .{}, .{} };
-    var adapterDescNum: u32 = 2;
-    var result: nri.NriResult = nri.nriEnumerateAdapters(@ptrCast(&adapterDescs[0]), @ptrCast(&adapterDescNum));
-    std.debug.print("This is the first result: {any}", .{result});
-    result = nri.nriCreateDevice(&nri.NriDeviceCreationDesc{ .graphicsAPI = nri.NriGraphicsAPI_VK, .enableGraphicsAPIValidation = true, .enableNRIValidation = true, .adapterDesc = @ptrCast(&adapterDescs[0]) }, @ptrCast(&device));
-    std.debug.print("This is the second result: {any}", .{result});
-    std.debug.print("This is the Name: {s}", .{adapterDescs[0].name});
+    var window = try wayland.createWindow(800, 600);
+    defer wayland.destroyWindow(&window);
+    std.debug.print("Window created!\n", .{});
+    while (!window.should_close) {
+        wayland.pollEvents(&window);
+        // You can add rendering or input logic here
+        std.time.sleep(16_000_000); // ~60 FPS
+    }
+    std.debug.print("Window closed.\n", .{});
 }

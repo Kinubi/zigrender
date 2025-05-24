@@ -1,51 +1,31 @@
 const std = @import("std");
-
-const Key = enum {
-    Up,
-    Down,
-    Left,
-    Right,
-    Space,
-    Escape,
-    NUM,
-};
-
-const Button = enum {
-    Left,
-    Right,
-    Middle,
-    NUM,
-};
+const types = @import("types/index.zig");
 
 pub const Controls = struct {
-    keyState: [Key.NUM]bool,
-    keyToggled: [Key.NUM]bool,
-    buttonState: [Button.NUM]bool,
-    mouseDelta: f32,
-    mouseWheel: f32,
+    keyState: [types.Key.NUM]bool = [_]bool{false} ** @intFromEnum(types.Key.NUM),
+    keyToggled: [types.Key.NUM]bool = [_]bool{false} ** @intFromEnum(types.Key.NUM),
+    buttonState: [types.Button.NUM]bool = [_]bool{false} ** @intFromEnum(types.Button.NUM),
+    mouseDelta: types.float2 = .{ .x = 0, .y = 0 },
+    mouseWheel: f32 = 0.0,
 
     pub fn init() Controls {
-        return Controls{
-            .keyState = undefined,
-            .keyToggled = undefined,
-            .buttonState = undefined,
-            .mouseDelta = 0.0,
-            .mouseWheel = 0.0,
-        };
+        return Controls{};
     }
 
-    pub fn updateKeyState(self: *Controls, key: Key, pressed: bool) void {
-        self.keyState[key] = pressed;
-        if (pressed) {
-            self.keyToggled[key] = true;
+    pub fn updateKeyState(self: *Controls, key: types.Key, pressed: bool) void {
+        const idx = @intFromEnum(key);
+        if (pressed and !self.keyState[idx]) {
+            self.keyToggled[idx] = true;
         }
+        self.keyState[idx] = pressed;
     }
 
-    pub fn updateButtonState(self: *Controls, button: Button, pressed: bool) void {
-        self.buttonState[button] = pressed;
+    pub fn updateButtonState(self: *Controls, button: types.Button, pressed: bool) void {
+        const idx = @intFromEnum(button);
+        self.buttonState[idx] = pressed;
     }
 
-    pub fn getMouseDelta(self: *Controls) f32 {
+    pub fn getMouseDelta(self: *Controls) types.float2 {
         return self.mouseDelta;
     }
 
@@ -54,8 +34,8 @@ pub const Controls = struct {
     }
 
     pub fn resetToggles(self: *Controls) void {
-        for (key in Key) {
-            self.keyToggled[key] = false;
+        for (self.keyToggled) |*toggled| {
+            toggled.* = false;
         }
     }
 };
