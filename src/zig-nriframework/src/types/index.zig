@@ -1,4 +1,5 @@
 const std = @import("std");
+const nriframework = @import("../nriframework.zig");
 
 // Type aliases for framework compatibility
 pub const Fence = opaque {};
@@ -131,4 +132,17 @@ pub const float4x4 = struct {
         } };
     }
     // TODO: Add lookAtRH, perspectiveRH, multiply, etc.
+};
+
+pub const QueuedFrame = struct {
+    command_allocator: ?*nriframework.c.NriCommandAllocator = null,
+    command_buffer: ?*nriframework.c.NriCommandBuffer = null,
+    // Add more fields as needed for per-frame resources
+};
+
+pub const FrameData = struct {
+    // Add fields as needed for per-frame data
+    // Example:
+    command_allocator: ?*nriframework.c.NriCommandAllocator = null,
+    command_buffer: ?*nriframework.c.NriCommandBuffer = null,
 };

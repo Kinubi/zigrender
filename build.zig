@@ -93,8 +93,8 @@ pub fn build(b: *std.Build) !void {
 
     b.installArtifact(exe);
 
-    // Shader compilation step: compile all .hlsl files in shaders/ to .spv
-    const shader_dir = "shaders";
+    // Shader compilation step: compile all .hlsl files in src/shaders/ to .spv
+    const shader_dir = "src/shaders";
     var dir = try std.fs.cwd().openDir(shader_dir, .{ .iterate = true });
     defer dir.close();
     var it = dir.iterate();

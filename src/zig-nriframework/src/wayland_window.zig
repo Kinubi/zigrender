@@ -99,3 +99,12 @@ pub fn setScrollCallback(win: *WaylandWindow, cb: ?*const fn (?*anyopaque, f64, 
         c.glfwSetScrollCallback(@ptrCast(win.handle), cb);
     }
 }
+pub fn getFramebufferSize(win: *WaylandWindow) struct { width: u32, height: u32 } {
+    // In a real implementation, query the actual framebuffer size (GLFW or Wayland)
+    // For now, just return the stored width/height
+    return .{ .width = win.width, .height = win.height };
+}
+
+pub fn isOpen(win: *WaylandWindow) bool {
+    return !win.should_close;
+}

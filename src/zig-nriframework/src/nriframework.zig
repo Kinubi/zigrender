@@ -5,7 +5,7 @@ const controls = @import("controls.zig");
 const timer = @import("timer.zig");
 const helper = @import("helper.zig");
 const utils = @import("utils.zig");
-const wayland = @import("wayland_window.zig");
+const window_mod = @import("window.zig");
 
 // Import all NRI and extension headers as in the C++ framework
 pub const c = @cImport({
@@ -156,7 +156,7 @@ pub const SampleBase = struct {
 };
 
 // Platform-specific Window type (now Wayland only)
-pub const Window = wayland.WaylandWindow;
+pub const Window = window_mod.Window;
 
 // NRIInterface struct to hold all interfaces
 pub const NRIInterface = struct {
@@ -194,12 +194,12 @@ pub fn sampleMain(
     var sample = sampleType{};
     defer sample.vtable.deinit.?(sample);
     // Wayland window creation
-    sample.nriWindow = try wayland.createWindow(1280, 720);
+    sample.nriWindow = try window_mod.createWindow(1280, 720);
     // TODO: Add device creation, swapchain, and graphics API selection here
     if (sample.vtable.initialize(&sample, 0)) {
         // Main render loop
         while (!sample.nriWindow.should_close) {
-            wayland.pollEvents(&sample.nriWindow);
+            window_mod.pollEvents(&sample.nriWindow);
             // TODO: Integrate input polling, timer update, and Imgui frame begin/end here
             // Imgui integration point (pseudo):
             // if (sample.imguiRenderer) |imgui| {
@@ -212,7 +212,7 @@ pub fn sampleMain(
         }
     }
     // Wayland window destruction
-    wayland.destroyWindow(&sample.nriWindow);
+    window_mod.destroyWindow(&sample.nriWindow);
     // TODO: Add cleanup for device, swapchain, Imgui, and other resources
 }
 
@@ -234,14 +234,14 @@ pub fn createDevice(adapter_index: u32, enable_api_validation: bool, enable_nri_
     return device.?;
 }
 
-pub fn createSwapChain(iface: *const c.NriSwapChainInterface, device: *c.NriDevice, window: *wayland.WaylandWindow, queue: ?*c.NriQueue, width: u32, height: u32, format: u32, vsync: u32) !*c.NriSwapChain {
-    // Ensure window.handle is valid and surface is not null
-    if (window.handle == null) return error.InvalidWindowHandle;
+pub fn createSwapChain(iface: *const c.NriSwapChainInterface, device: *c.NriDevice, win: *window_mod.Window, queue: ?*c.NriQueue, width: u32, height: u32, format: u32, vsync: u32) !*c.NriSwapChain {
+    // Ensure win.handle is valid and surface is not null
+    if (win.handle == null) return error.InvalidWindowHandle;
 
     // Convert Zig NRIWindow to C NriWindow
     var c_window: c.struct_NriWindow = undefined;
-    c_window.wayland.display = window.nri_window.display;
-    c_window.wayland.surface = window.nri_window.surface;
+    c_window.wayland.display = win.nri_window.display;
+    c_window.wayland.surface = win.nri_window.surface;
 
     var swapChainDesc = c.NriSwapChainDesc{
         .window = c_window,
