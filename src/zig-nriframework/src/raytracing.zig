@@ -104,48 +104,18 @@ pub const Raytracing = struct {
         const padded_rchit = try pad_shader(self.allocator, rchit_shader);
         defer if (padded_rchit.ptr != rchit_shader.ptr) self.allocator.free(padded_rchit);
         var shaders = [3]nriframework.c.NriShaderDesc{
-            nriframework.c.NriShaderDesc{
-                .stage = nriframework.c.NriStageBits_RAYGEN_SHADER,
-                .bytecode = padded_rgen.ptr,
-                .size = padded_rgen.len,
-            },
-            nriframework.c.NriShaderDesc{
-                .stage = nriframework.c.NriStageBits_MISS_SHADER,
-                .bytecode = padded_rmiss.ptr,
-                .size = padded_rmiss.len,
-            },
-            nriframework.c.NriShaderDesc{
-                .stage = nriframework.c.NriStageBits_CLOSEST_HIT_SHADER,
-                .bytecode = padded_rchit.ptr,
-                .size = padded_rchit.len,
-            },
+            .{ .stage = nriframework.c.NriStageBits_RAYGEN_SHADER, .bytecode = padded_rgen.ptr, .size = padded_rgen.len, .entryPointName = "raygen" },
+            .{ .stage = nriframework.c.NriStageBits_MISS_SHADER, .bytecode = padded_rmiss.ptr, .size = padded_rmiss.len, .entryPointName = "miss" },
+            .{ .stage = nriframework.c.NriStageBits_CLOSEST_HIT_SHADER, .bytecode = padded_rchit.ptr, .size = padded_rchit.len, .entryPointName = "closest_hit" },
         };
         var shader_library = nriframework.c.NriShaderLibraryDesc{
             .shaders = &shaders,
             .shaderNum = 3,
         };
         var shader_groups = [3]nriframework.c.NriShaderGroupDesc{
-            nriframework.c.NriShaderGroupDesc{
-                .type = nriframework.c.NriShaderGroupType_RAYGEN,
-                .generalShaderIndex = 0,
-                .closestHitShaderIndex = 0xFFFFFFFF,
-                .anyHitShaderIndex = 0xFFFFFFFF,
-                .intersectionShaderIndex = 0xFFFFFFFF,
-            },
-            nriframework.c.NriShaderGroupDesc{
-                .type = nriframework.c.NriShaderGroupType_MISS,
-                .generalShaderIndex = 1,
-                .closestHitShaderIndex = 0xFFFFFFFF,
-                .anyHitShaderIndex = 0xFFFFFFFF,
-                .intersectionShaderIndex = 0xFFFFFFFF,
-            },
-            nriframework.c.NriShaderGroupDesc{
-                .type = nriframework.c.NriShaderGroupType_HIT,
-                .generalShaderIndex = 0xFFFFFFFF,
-                .closestHitShaderIndex = 2,
-                .anyHitShaderIndex = 0xFFFFFFFF,
-                .intersectionShaderIndex = 0xFFFFFFFF,
-            },
+            .{ .shaderIndices = .{ 1, 0, 0 } }, // raygen
+            .{ .shaderIndices = .{ 2, 0, 0 } }, // miss
+            .{ .shaderIndices = .{ 3, 0, 0 } },
         };
         var pipeline_desc = nriframework.c.NriRayTracingPipelineDesc{
             .recursionMaxDepth = 1,
@@ -261,6 +231,24 @@ pub const Raytracing = struct {
         try self.create_descriptor_set();
         // Note: create_blas_tlas must be called with instances array by user after init
         try self.create_shader_table();
+        // Initialize command allocators and command buffers for each frame
+        try self.init_command_buffers();
+    }
+
+    pub fn init_command_buffers(self: *Raytracing) !void {
+        for (self.frames) |*frame| {
+            // Create command allocator
+            var command_allocator: ?*nriframework.c.NriCommandAllocator = null;
+            if (self.nri.core.CreateCommandAllocator.?(self.queue, &command_allocator) != nriframework.c.NriResult_SUCCESS or command_allocator == null)
+                return error.NRICreateCommandAllocatorFailed;
+            frame.command_allocator = command_allocator;
+
+            // Create command buffer
+            var command_buffer: ?*nriframework.c.NriCommandBuffer = null;
+            if (self.nri.core.CreateCommandBuffer.?(command_allocator, &command_buffer) != nriframework.c.NriResult_SUCCESS or command_buffer == null)
+                return error.NRICreateCommandBufferFailed;
+            frame.command_buffer = command_buffer;
+        }
     }
 
     /// Creates BLAS and TLAS for the current scene, supporting multiple instances and dynamic updates.
@@ -417,156 +405,6 @@ pub const Raytracing = struct {
         if (self.nri.raytracing.WriteShaderGroupIdentifiers) |WriteShaderGroupIdentifiers| {
             _ = WriteShaderGroupIdentifiers(self.pipeline, 0, 3, shader_table);
         }
-    }
-
-    pub fn record_and_submit(self: *Raytracing, frame_index: u32, image_index: u32) !void {
-        var frame = &self.frames[frame_index % self.frames.len];
-        self.nri.core.ResetCommandAllocator.?(frame.command_allocator);
-        if (self.nri.core.BeginCommandBuffer.?(frame.command_buffer, self.descriptor_pool) != nriframework.c.NriResult_SUCCESS)
-            return error.NRIBeginCommandBufferFailed;
-        // Barriers: swapchain to COPY_DEST, raytracing output to GENERAL
-        const swapchain_tex = &self.swapchain_textures[image_index];
-        const barrier_swapchain_to_copy_dst = nriframework.c.NriTextureBarrierDesc{
-            .texture = @ptrCast(swapchain_tex.texture),
-            .before = nriframework.c.NriAccessLayoutStage{
-                .access = nriframework.c.NriAccessBits_UNKNOWN,
-                .layout = nriframework.c.NriLayout_UNKNOWN,
-            },
-            .after = nriframework.c.NriAccessLayoutStage{
-                .access = nriframework.c.NriAccessBits_COPY_DESTINATION,
-                .layout = nriframework.c.NriLayout_COPY_DESTINATION,
-            },
-            .mipNum = 1,
-            .mipOffset = 0,
-        };
-        var barrier_desc1 = nriframework.c.NriBarrierGroupDesc{
-            .textureNum = 1,
-            .textures = &barrier_swapchain_to_copy_dst,
-            .bufferNum = 0,
-            .buffers = null,
-        };
-        self.nri.core.CmdBarrier.?(frame.command_buffer, &barrier_desc1);
-        // Raytracing output barrier
-        const rt_output_before = if (frame_index == 0)
-            nriframework.c.NriAccessLayoutStage{
-                .access = nriframework.c.NriAccessBits_UNKNOWN,
-                .layout = nriframework.c.NriLayout_UNKNOWN,
-            }
-        else
-            nriframework.c.NriAccessLayoutStage{
-                .access = nriframework.c.NriAccessBits_COPY_SOURCE,
-                .layout = nriframework.c.NriLayout_COPY_SOURCE,
-            };
-        const barrier_rt_output_to_general = nriframework.c.NriTextureBarrierDesc{
-            .texture = self.raytracing_output,
-            .before = rt_output_before,
-            .after = nriframework.c.NriAccessLayoutStage{
-                .access = nriframework.c.NriAccessBits_SHADER_RESOURCE_STORAGE,
-                .layout = nriframework.c.NriLayout_SHADER_RESOURCE_STORAGE,
-            },
-            .mipNum = 1,
-            .mipOffset = 0,
-        };
-        var barrier_desc2 = nriframework.c.NriBarrierGroupDesc{
-            .textureNum = 1,
-            .textures = &barrier_rt_output_to_general,
-            .bufferNum = 0,
-            .buffers = null,
-        };
-        self.nri.core.CmdBarrier.?(frame.command_buffer, &barrier_desc2);
-        // Bind pipeline, layout, descriptor set
-        self.nri.core.CmdSetPipelineLayout.?(frame.command_buffer, self.pipeline_layout);
-        self.nri.core.CmdSetPipeline.?(frame.command_buffer, self.pipeline);
-        self.nri.core.CmdSetDescriptorSet.?(frame.command_buffer, 0, self.descriptor_set, null);
-        // Dispatch rays
-        const identifier_size = self.shader_table_stride;
-        var dispatch_desc = nriframework.c.NriDispatchRaysDesc{
-            .raygenShader = .{
-                .buffer = self.shader_table,
-                .offset = self.shader_table_raygen_offset,
-                .size = identifier_size,
-                .stride = identifier_size,
-            },
-            .missShaders = .{
-                .buffer = self.shader_table,
-                .offset = self.shader_table_miss_offset,
-                .size = identifier_size,
-                .stride = identifier_size,
-            },
-            .hitShaderGroups = .{
-                .buffer = self.shader_table,
-                .offset = self.shader_table_hit_offset,
-                .size = identifier_size,
-                .stride = identifier_size,
-            },
-            .x = 800, // TODO: dynamic size
-            .y = 600,
-            .z = 1,
-        };
-        self.nri.raytracing.CmdDispatchRays.?(frame.command_buffer, &dispatch_desc);
-        // Raytracing output to COPY_SRC
-        const barrier_rt_output_to_copy_src = nriframework.c.NriTextureBarrierDesc{
-            .texture = self.raytracing_output,
-            .before = nriframework.c.NriAccessLayoutStage{
-                .access = nriframework.c.NriAccessBits_SHADER_RESOURCE_STORAGE,
-                .layout = nriframework.c.NriLayout_SHADER_RESOURCE_STORAGE,
-            },
-            .after = nriframework.c.NriAccessLayoutStage{
-                .access = nriframework.c.NriAccessBits_COPY_SOURCE,
-                .layout = nriframework.c.NriLayout_COPY_SOURCE,
-            },
-            .mipNum = 1,
-            .mipOffset = 0,
-        };
-        var barrier_desc3 = nriframework.c.NriBarrierGroupDesc{
-            .textureNum = 1,
-            .textures = &barrier_rt_output_to_copy_src,
-            .bufferNum = 0,
-            .buffers = null,
-        };
-        self.nri.core.CmdBarrier.?(frame.command_buffer, &barrier_desc3);
-        // Copy raytracing output to swapchain
-        self.nri.core.CmdCopyTexture.?(frame.command_buffer, @ptrCast(swapchain_tex.texture), null, self.raytracing_output, null);
-        // Swapchain to PRESENT
-        const barrier_swapchain_to_present = nriframework.c.NriTextureBarrierDesc{
-            .texture = @ptrCast(swapchain_tex.texture),
-            .before = nriframework.c.NriAccessLayoutStage{
-                .access = nriframework.c.NriAccessBits_COPY_DESTINATION,
-                .layout = nriframework.c.NriLayout_COPY_DESTINATION,
-            },
-            .after = nriframework.c.NriAccessLayoutStage{
-                .access = nriframework.c.NriAccessBits_UNKNOWN,
-                .layout = nriframework.c.NriLayout_PRESENT,
-            },
-            .mipNum = 1,
-            .mipOffset = 0,
-        };
-        var barrier_desc4 = nriframework.c.NriBarrierGroupDesc{
-            .textureNum = 1,
-            .textures = &barrier_swapchain_to_present,
-            .bufferNum = 0,
-            .buffers = null,
-        };
-        self.nri.core.CmdBarrier.?(frame.command_buffer, &barrier_desc4);
-        if (self.nri.core.EndCommandBuffer.?(frame.command_buffer) != nriframework.c.NriResult_SUCCESS)
-            return error.NRIEndCommandBufferFailed;
-        // Submit
-        var wait_fence_descs = [_]nriframework.c.NriFenceSubmitDesc{
-            .{ .fence = @ptrCast(swapchain_tex.acquireSemaphore), .stages = nriframework.c.NriStageBits_ALL },
-        };
-        var signal_fence_descs = [_]nriframework.c.NriFenceSubmitDesc{
-            .{ .fence = @ptrCast(swapchain_tex.releaseSemaphore) },
-            .{ .fence = self.frame_fence, .value = 1 + frame_index },
-        };
-        var submit_desc = nriframework.c.NriQueueSubmitDesc{
-            .commandBuffers = &frame.command_buffer,
-            .commandBufferNum = 1,
-            .waitFences = &wait_fence_descs,
-            .waitFenceNum = 1,
-            .signalFences = &signal_fence_descs,
-            .signalFenceNum = 2,
-        };
-        self.nri.core.QueueSubmit.?(self.queue, &submit_desc);
     }
 
     pub fn update_dispatch_dimensions(self: *Raytracing, width: u32, height: u32) void {

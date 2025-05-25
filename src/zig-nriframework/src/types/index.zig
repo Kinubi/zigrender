@@ -55,9 +55,9 @@ pub const uint2 = struct {
 };
 
 pub const SwapChainTexture = struct {
-    acquireSemaphore: ?*Fence,
-    releaseSemaphore: ?*Fence,
-    frame_fence: ?*Fence, // Per-image fence for CPU-GPU sync
+    acquireSemaphore: ?*nriframework.c.NriFence,
+    releaseSemaphore: ?*nriframework.c.NriFence,
+
     texture: ?*Texture,
     colorAttachment: ?*Descriptor,
     attachmentFormat: Format,

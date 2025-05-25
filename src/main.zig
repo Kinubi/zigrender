@@ -17,9 +17,14 @@ pub fn main() !void {
     const nri_device = try nriframework.createDevice(0, false, false);
     var nri: nriframework.NRIInterface = undefined;
     try nriframework.getInterfaces(nri_device, &nri);
-
-    // Get the graphics queue (queue type 0 = GRAPHICS, index 0)
     const nri_queue = try nriframework.getQueue(&nri.core, nri_device, 0, 0);
+
+    // Create a frame fence for CPU-GPU sync (must not be null!)
+    var frame_fence: ?*nriframework.c.NriFence = null;
+    if (nri.core.CreateFence.?(nri_device, 0, &frame_fence) != nriframework.c.NriResult_SUCCESS or frame_fence == null) {
+        std.debug.print("Failed to create frame fence!\n", .{});
+        return error.NRICreateFrameFenceFailed;
+    }
 
     // Create the NRI swapchain using the interface and device
     // You must call createSwapChain from nriframework.zig, not use nri.swapchain directly
@@ -35,7 +40,6 @@ pub fn main() !void {
         0, // format (choose appropriate format)
         1, // vsync
     );
-    const frame_fence: ?*nriframework.c.NriFence = null;
     var swapchain = try swapchain_mod.Swapchain.init(
         nri,
         nri_device,

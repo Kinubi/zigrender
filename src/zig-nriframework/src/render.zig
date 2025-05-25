@@ -20,7 +20,7 @@ pub fn main_loop(
         const extent = WindowAbstraction.getFramebufferSize(window);
         if (extent.width != last_extent.width or extent.height != last_extent.height) {
             // Wait for device idle or all fences
-            if (frame_fence != null) _ = nri.core.Wait.?(frame_fence, 1);
+            if (frame_fence != null) _ = nri.core.Wait.?(frame_fence, 0);
             // Recreate swapchain
             swapchain.deinit(allocator);
             swapchain.* = try swapchain_mod.Swapchain.init(
@@ -38,8 +38,30 @@ pub fn main_loop(
             last_extent = extent;
         }
 
-        const image_index = try swapchain.acquireNextImage();
-        try raytracing.record_and_submit(0, image_index);
+        const image_index = swapchain.acquireNextImage() catch |err| {
+            if (err == error.SwapchainOutOfDate) {
+                std.debug.print("Swapchain out of date, recreating...\n", .{});
+                // Wait for device idle or all fences before recreating
+                if (frame_fence != null) _ = nri.core.Wait.?(frame_fence, 1);
+                swapchain.deinit(allocator);
+                swapchain.* = try swapchain_mod.Swapchain.init(
+                    nri,
+                    swapchain.device,
+                    swapchain.swapchain,
+                    frame_fence,
+                    allocator,
+                );
+                try raytracing.create_raytracing_output();
+                try raytracing.create_descriptor_set();
+                try raytracing.create_shader_table();
+                raytracing.update_dispatch_dimensions(extent.width, extent.height);
+                last_extent = extent;
+                continue;
+            }
+            std.debug.print("acquireNextImage failed: {any}\n", .{err});
+            return err;
+        };
+        try swapchain.record_and_submit(raytracing, 0, image_index);
         try swapchain.present();
     }
     if (frame_fence != null) _ = nri.core.Wait.?(frame_fence, 1);
