@@ -54,11 +54,13 @@ pub const uint2 = struct {
 };
 
 pub const SwapChainTexture = struct {
-    acquireSemaphore: *Fence,
-    releaseSemaphore: *Fence,
-    texture: *Texture,
-    colorAttachment: *Descriptor,
+    acquireSemaphore: ?*Fence,
+    releaseSemaphore: ?*Fence,
+    frame_fence: ?*Fence, // Per-image fence for CPU-GPU sync
+    texture: ?*Texture,
+    colorAttachment: ?*Descriptor,
     attachmentFormat: Format,
+    // Optionally, track last known layout for this image if needed
 };
 
 pub const VKBindingOffsets = struct {

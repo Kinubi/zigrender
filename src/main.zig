@@ -2,7 +2,7 @@ const std = @import("std");
 const wayland = @import("zig-nriframework/src/wayland_window.zig");
 const nriframework = @import("zig-nriframework/src/nriframework.zig");
 
-const MAX_FRAMES_IN_FLIGHT = 2;
+const MAX_FRAMES_IN_FLIGHT = 3;
 const SWAPCHAIN_TEXTURE_NUM = 3;
 
 const QueuedFrame = struct {
@@ -20,6 +20,7 @@ const SwapChainTexture = struct {
         .access = nriframework.c.NriAccessBits_UNKNOWN,
         .layout = nriframework.c.NriLayout_UNKNOWN,
     },
+    frame_fence: ?*nriframework.c.NriFence = null, // Per-image fence for CPU-GPU sync
 };
 
 const Sample = struct {
@@ -28,14 +29,10 @@ const Sample = struct {
     window: wayland.WaylandWindow,
     queue: *nriframework.c.NriQueue,
     swapchain: *nriframework.c.NriSwapChain,
-    frame_fence: ?*nriframework.c.NriFence = null,
-    frame_fence_value: u64 = 0,
     // Raytracing resources
     frames: [MAX_FRAMES_IN_FLIGHT]QueuedFrame = undefined,
     swapchain_textures: [SWAPCHAIN_TEXTURE_NUM]SwapChainTexture = undefined,
-    // Per-frame acquire/release semaphores
-    acquire_semaphores: [SWAPCHAIN_TEXTURE_NUM]?*nriframework.c.NriFence = undefined,
-    release_semaphores: [SWAPCHAIN_TEXTURE_NUM]?*nriframework.c.NriFence = undefined,
+    // Removed per-frame acquire/release semaphores from Sample
     pipeline: ?*nriframework.c.NriPipeline = null,
     pipeline_layout: ?*nriframework.c.NriPipelineLayout = null,
     descriptor_pool: ?*nriframework.c.NriDescriptorPool = null,
@@ -52,11 +49,7 @@ const Sample = struct {
     shader_table_miss_offset: u64 = 0,
     shader_table_hit_offset: u64 = 0,
     shader_table_stride: usize = 0,
-    // Track current layout of raytracing output image
-    raytracing_output_layout: nriframework.c.NriAccessLayoutStage = nriframework.c.NriAccessLayoutStage{
-        .access = nriframework.c.NriAccessBits_UNKNOWN,
-        .layout = nriframework.c.NriLayout_UNKNOWN,
-    },
+    // Removed global frame_fence; now per-image
 };
 
 // Helper: align to 4 bytes (Vulkan SPIR-V requirement)
@@ -86,7 +79,7 @@ fn create_swapchain_textures(sample: *Sample) !void {
     const textures = sample.nri.swapchain.GetSwapChainTextures.?(sample.swapchain, &texture_num);
     if (textures == null or texture_num == 0) return error.NRISwapChainTexturesFailed;
     if (texture_num > SWAPCHAIN_TEXTURE_NUM) return error.TooManySwapchainTextures;
-    // Create color attachment views for each swapchain image (no semaphores here)
+    // Create color attachment views and per-image fences for each swapchain image
     for (sample.swapchain_textures[0..texture_num], 0..) |*sct, i| {
         // Create color attachment view
         var view_desc = nriframework.c.NriTexture2DViewDesc{
@@ -97,6 +90,17 @@ fn create_swapchain_textures(sample: *Sample) !void {
         var color_attachment: ?*nriframework.c.NriDescriptor = null;
         if (sample.nri.core.CreateTexture2DView.?(&view_desc, &color_attachment) != nriframework.c.NriResult_SUCCESS or color_attachment == null)
             return error.NRICreateSwapchainTextureViewFailed;
+        // Create per-image fence
+        var frame_fence: ?*nriframework.c.NriFence = null;
+        if (sample.nri.core.CreateFence.?(sample.device, 0, &frame_fence) != nriframework.c.NriResult_SUCCESS or frame_fence == null)
+            return error.NRICreateFrameFenceFailed;
+        // Create per-image acquire and release semaphores
+        var acquire_semaphore: ?*nriframework.c.NriFence = null;
+        if (sample.nri.core.CreateFence.?(sample.device, nriframework.c.NRI_SWAPCHAIN_SEMAPHORE, &acquire_semaphore) != nriframework.c.NriResult_SUCCESS or acquire_semaphore == null)
+            return error.NRICreateAcquireSemaphoreFailed;
+        var release_semaphore: ?*nriframework.c.NriFence = null;
+        if (sample.nri.core.CreateFence.?(sample.device, nriframework.c.NRI_SWAPCHAIN_SEMAPHORE, &release_semaphore) != nriframework.c.NriResult_SUCCESS or release_semaphore == null)
+            return error.NRICreateReleaseSemaphoreFailed;
         sct.* = SwapChainTexture{
             .texture = textures[i],
             .color_attachment = color_attachment,
@@ -105,6 +109,9 @@ fn create_swapchain_textures(sample: *Sample) !void {
                 .access = nriframework.c.NriAccessBits_UNKNOWN,
                 .layout = nriframework.c.NriLayout_UNKNOWN,
             },
+            .frame_fence = frame_fence,
+            .acquire_semaphore = acquire_semaphore,
+            .release_semaphore = release_semaphore,
         };
     }
     // Zero out any unused slots (if any)
@@ -113,6 +120,7 @@ fn create_swapchain_textures(sample: *Sample) !void {
             .texture = null,
             .color_attachment = null,
             .attachment_format = 0,
+            .frame_fence = null,
         };
     }
 }
@@ -468,8 +476,7 @@ fn create_shader_table(sample: *Sample) !void {
     // ...
 }
 
-fn record_and_submit(sample: *Sample, frame_index: u32, image_index: u32, acquire_semaphore: ?*nriframework.c.NriFence) !void {
-
+fn record_and_submit(sample: *Sample, frame_index: u32, image_index: u32) !void {
     // Begin command buffer
     var frame = &sample.frames[frame_index % MAX_FRAMES_IN_FLIGHT];
     // Reset command allocator before recording each frame
@@ -498,8 +505,8 @@ fn record_and_submit(sample: *Sample, frame_index: u32, image_index: u32, acquir
     const barrier_rt_output_to_shader = nriframework.c.NriTextureBarrierDesc{
         .texture = sample.raytracing_output,
         .before = nriframework.c.NriAccessLayoutStage{
-            .access = sample.raytracing_output_layout.access,
-            .layout = sample.raytracing_output_layout.layout,
+            .access = nriframework.c.NriAccessBits_UNKNOWN,
+            .layout = nriframework.c.NriLayout_UNKNOWN,
         },
         .after = nriframework.c.NriAccessLayoutStage{
             .access = nriframework.c.NriAccessBits_SHADER_RESOURCE_STORAGE,
@@ -563,8 +570,8 @@ fn record_and_submit(sample: *Sample, frame_index: u32, image_index: u32, acquir
     const barrier_rt_output_to_copy_src = nriframework.c.NriTextureBarrierDesc{
         .texture = sample.raytracing_output,
         .before = nriframework.c.NriAccessLayoutStage{
-            .access = sample.raytracing_output_layout.access,
-            .layout = sample.raytracing_output_layout.layout,
+            .access = nriframework.c.NriAccessBits_SHADER_RESOURCE_STORAGE,
+            .layout = nriframework.c.NriLayout_SHADER_RESOURCE_STORAGE,
         },
         .after = nriframework.c.NriAccessLayoutStage{
             .access = nriframework.c.NriAccessBits_COPY_SOURCE,
@@ -581,10 +588,10 @@ fn record_and_submit(sample: *Sample, frame_index: u32, image_index: u32, acquir
     };
     sample.nri.core.CmdBarrier.?(frame.command_buffer, &barrier_desc2);
     // After transition, update tracked layout
-    sample.raytracing_output_layout = nriframework.c.NriAccessLayoutStage{
-        .access = nriframework.c.NriAccessBits_COPY_SOURCE,
-        .layout = nriframework.c.NriLayout_COPY_SOURCE,
-    };
+    //sample.raytracing_output_layout = nriframework.c.NriAccessLayoutStage{
+    //    .access = nriframework.c.NriAccessBits_COPY_SOURCE,
+    //    .layout = nriframework.c.NriLayout_COPY_SOURCE,
+    //};
 
     sample.nri.core.CmdCopyTexture.?(frame.command_buffer, swapchain_tex.texture, null, sample.raytracing_output, null);
     // 4. Transition swapchain image to PRESENT for presentation
@@ -619,13 +626,12 @@ fn record_and_submit(sample: *Sample, frame_index: u32, image_index: u32, acquir
         return error.NRIEndCommandBufferFailed;
     // Submit
     var wait_fence_descs = [_]nriframework.c.NriFenceSubmitDesc{
-        .{ .fence = acquire_semaphore, .stages = nriframework.c.NriStageBits_ALL },
+        .{ .fence = sample.swapchain_textures[frame_index % SWAPCHAIN_TEXTURE_NUM].acquire_semaphore, .stages = nriframework.c.NriStageBits_ALL },
     };
+    std.debug.print("Submitting frame {} for image {}\n", .{frame_index, image_index});
     var signal_fence_descs = [_]nriframework.c.NriFenceSubmitDesc{
-        .{
-            .fence = sample.release_semaphores[image_index],
-        },
-        .{ .fence = sample.frame_fence, .value = sample.frame_fence_value },
+        .{ .fence = sample.swapchain_textures[image_index].release_semaphore}, // Use per-image release semaphore
+        .{ .fence = sample.swapchain_textures[image_index].frame_fence, .value = frame_index + 1 }, // Use frame index as value for CPU-GPU sync
     };
     var submit_desc = nriframework.c.NriQueueSubmitDesc{
         .commandBuffers = &frame.command_buffer,
@@ -633,10 +639,9 @@ fn record_and_submit(sample: *Sample, frame_index: u32, image_index: u32, acquir
         .waitFences = &wait_fence_descs,
         .waitFenceNum = 1,
         .signalFences = &signal_fence_descs,
-        .signalFenceNum = 2,
+        .signalFenceNum = 1,
     };
     sample.nri.core.QueueSubmit.?(sample.queue, &submit_desc);
-    sample.frame_fence_value += 1;
 }
 
 pub fn main() !void {
@@ -660,21 +665,7 @@ pub fn main() !void {
     const swapchain = try nriframework.createSwapChain(&nri.swapchain, device, &window, queue, window.width, window.height, nriframework.c.NriSwapChainFormat_BT709_G22_8BIT, 0);
     defer nri.swapchain.DestroySwapChain.?(swapchain); // Ensures swapchain (and VkSurfaceKHR) destroyed before device
     // 6. Create frame fence for CPU-GPU sync
-    const frame_fence = try nriframework.createFence(&nri.core, device, 0);
-    defer nri.core.DestroyFence.?(frame_fence);
-    // 6.1. Create per-image acquire/release semaphores
-    var acquire_semaphores: [SWAPCHAIN_TEXTURE_NUM]?*nriframework.c.NriFence = undefined;
-    var release_semaphores: [SWAPCHAIN_TEXTURE_NUM]?*nriframework.c.NriFence = undefined;
-    for (0..SWAPCHAIN_TEXTURE_NUM) |i| {
-        var acq: ?*nriframework.c.NriFence = null;
-        if (nri.core.CreateFence.?(device, nriframework.c.NRI_SWAPCHAIN_SEMAPHORE, &acq) != nriframework.c.NriResult_SUCCESS or acq == null)
-            return error.NRICreateAcquireSemaphoreFailed;
-        acquire_semaphores[i] = acq;
-        var rel: ?*nriframework.c.NriFence = null;
-        if (nri.core.CreateFence.?(device, nriframework.c.NRI_SWAPCHAIN_SEMAPHORE, &rel) != nriframework.c.NriResult_SUCCESS or rel == null)
-            return error.NRICreateReleaseSemaphoreFailed;
-        release_semaphores[i] = rel;
-    }
+    // (No global frame_fence or per-image acquire/release semaphores here)
     // 7. Load shaders from disk (SPIR-V bytecode)
     const allocator = std.heap.c_allocator;
     const rgen_shader = try std.fs.cwd().readFileAlloc(allocator, "shaders/RayTracingTriangle.rgen.hlsl.spv", 10 * 1024);
@@ -690,10 +681,7 @@ pub fn main() !void {
         .window = window,
         .queue = queue,
         .swapchain = swapchain,
-        .frame_fence = frame_fence,
-        .acquire_semaphores = acquire_semaphores,
-        .release_semaphores = release_semaphores,
-        .frame_fence_value = 1, // Start at 1 for timeline semaphore
+        // Remove acquire_semaphores and release_semaphores from Sample
     };
     try create_swapchain_textures(&sample);
     try create_raytracing_pipeline(&sample, rgen_shader, rmiss_shader, rchit_shader);
@@ -717,30 +705,37 @@ pub fn main() !void {
     }
     std.debug.print("NRI device, interfaces, queue, swapchain, fence, and resources created!\n", .{});
     var frame_index: u32 = 0;
+    var next_acquire_index: u32 = 0;
     while (!sample.window.should_close) {
         wayland.pollEvents(&sample.window);
 
-        // Wait for frame fence before starting work for this frame (always wait for value = frame_fence_value - MAX_FRAMES_IN_FLIGHT)
-        if (frame_index + 1 > MAX_FRAMES_IN_FLIGHT) {
-            if (sample.frame_fence) |ffence| {
-                _ = sample.nri.core.Wait.?(ffence, sample.frame_fence_value - MAX_FRAMES_IN_FLIGHT);
-            }
+        // Wait for the fence for the image we are about to acquire
+        if (sample.swapchain_textures[next_acquire_index].frame_fence) |fence| {
+            nri.core.Wait.?(fence, 1);
         }
-        // Reset raytracing output layout tracking at the start of each frame
-        sample.raytracing_output_layout = nriframework.c.NriAccessLayoutStage{
-            .access = nriframework.c.NriAccessBits_UNKNOWN,
-            .layout = nriframework.c.NriLayout_UNKNOWN,
-        };
-        // Acquire next swapchain image using a rotating pool of acquire semaphores
+
+        // Acquire next image, passing the acquire_semaphore for this image
         var image_index: u32 = 0;
-        const acquire_semaphore = sample.acquire_semaphores[frame_index % SWAPCHAIN_TEXTURE_NUM];
-        try nriframework.acquireNextTexture(&sample.nri.swapchain, sample.swapchain, acquire_semaphore, &image_index);
-        try record_and_submit(&sample, frame_index, image_index, acquire_semaphore);
-        // Use release semaphore for this image
-        const release_semaphore = sample.release_semaphores[image_index];
-        try nriframework.queuePresent(&sample.nri.swapchain, sample.swapchain, release_semaphore);
-        frame_index += 1;
-        sample.frame_fence_value += 1; // Always increment after submit
+        try nriframework.acquireNextTexture(
+            &sample.nri.swapchain,
+            sample.swapchain,
+            sample.swapchain_textures[next_acquire_index].acquire_semaphore,
+            &image_index
+        );
+        const swapchain_tex = &sample.swapchain_textures[image_index];
+
+        // Reset command allocator for this frame
+        if (sample.frames[frame_index].command_allocator) |ca| sample.nri.core.ResetCommandAllocator.?(ca);
+
+        // Record and submit work for this frame
+        try record_and_submit(&sample, frame_index, image_index);
+
+        // Present the current frame, dependent on semaphore signaled by submit
+        try nriframework.queuePresent(&sample.nri.swapchain, sample.swapchain, swapchain_tex.release_semaphore);
+
+        // Next frame
+        frame_index = (frame_index + 1) % MAX_FRAMES_IN_FLIGHT;
+        next_acquire_index = (next_acquire_index + 1) % SWAPCHAIN_TEXTURE_NUM;
         std.time.sleep(16_000_000); // ~60 FPS
     }
     std.debug.print("Window closed.\n", .{});
@@ -750,14 +745,10 @@ pub fn main() !void {
         if (frame.command_buffer) |cb| sample.nri.core.DestroyCommandBuffer.?(cb);
         if (frame.command_allocator) |ca| sample.nri.core.DestroyCommandAllocator.?(ca);
     }
-    // Destroy per-frame acquire/release semaphores
-    for (0..MAX_FRAMES_IN_FLIGHT) |i| {
-        if (sample.acquire_semaphores[i]) |sem| sample.nri.core.DestroyFence.?(sem);
-        if (sample.release_semaphores[i]) |sem| sample.nri.core.DestroyFence.?(sem);
-    }
-    // Destroy per-image acquire/release semaphores
+    // Destroy per-image semaphores and fences
     for (0..SWAPCHAIN_TEXTURE_NUM) |i| {
-        if (sample.acquire_semaphores[i]) |sem| sample.nri.core.DestroyFence.?(sem);
-        if (sample.release_semaphores[i]) |sem| sample.nri.core.DestroyFence.?(sem);
+        if (sample.swapchain_textures[i].acquire_semaphore) |sem| sample.nri.core.DestroyFence.?(sem);
+        if (sample.swapchain_textures[i].release_semaphore) |sem| sample.nri.core.DestroyFence.?(sem);
+        if (sample.swapchain_textures[i].frame_fence) |fence| sample.nri.core.DestroyFence.?(fence);
     }
 }

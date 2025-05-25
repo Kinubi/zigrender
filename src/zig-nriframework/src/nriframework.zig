@@ -278,12 +278,17 @@ pub fn acquireNextTexture(swapchain: *const c.NriSwapChainInterface, swap_chain:
     std.debug.print("AcquireNextTexture ptr: {any}\n", .{swapchain.AcquireNextTexture});
     std.debug.print("swap_chain ptr: {any}\n", .{swap_chain});
     std.debug.print("acquire_semaphore ptr: {any}\n", .{acquire_semaphore});
-    std.debug.print("out_index ptr: {any}\n", .{out_index});
+    std.debug.print("out_index: {any}\n", .{out_index.*});
     if (swapchain.AcquireNextTexture.?(swap_chain, acquire_semaphore, out_index) != c.NriResult_SUCCESS)
         return error.NRIAcquireNextTextureFailed;
+    std.debug.print("out_index: {any}\n", .{out_index.*});
 }
 
-pub fn queuePresent(swapchain: *const c.NriSwapChainInterface, swap_chain: *c.NriSwapChain, release_semaphore: ?*c.NriFence) !void {
+pub fn queuePresent(
+    swapchain: *const c.NriSwapChainInterface,
+    swap_chain: *c.NriSwapChain,
+    release_semaphore: ?*c.NriFence,
+) !void {
     if (swapchain.QueuePresent.?(swap_chain, release_semaphore) != c.NriResult_SUCCESS)
         return error.NRIQueuePresentFailed;
 }
