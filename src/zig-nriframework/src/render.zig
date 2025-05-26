@@ -15,6 +15,7 @@ pub fn main_loop(
     window: *WindowAbstraction.Window,
 ) !void {
     var last_extent = WindowAbstraction.getFramebufferSize(window);
+    var frame_index: u32 = 0;
     while (WindowAbstraction.isOpen(window)) {
         WindowAbstraction.pollEvents(window);
         const extent = WindowAbstraction.getFramebufferSize(window);
@@ -26,6 +27,7 @@ pub fn main_loop(
             swapchain.* = try swapchain_mod.Swapchain.init(
                 nri,
                 swapchain.device,
+                swapchain.graphics_queue, // pass graphics queue
                 swapchain.swapchain, // If needed, re-create the underlying NRI swapchain here
                 frame_fence,
                 allocator,
@@ -37,8 +39,16 @@ pub fn main_loop(
             raytracing.update_dispatch_dimensions(extent.width, extent.height);
             last_extent = extent;
         }
-
-        const image_index = swapchain.acquireNextImage() catch |err| {
+        var wait_frame: u32 = 0;
+        if (frame_index >= raytracing.frames.len) {
+            // Wait for the previous frame to finish if we have too many queued frames
+            wait_frame = 1 + frame_index - @as(u32, @intCast(raytracing.frames.len));
+        } else {
+            wait_frame = 0;
+        }
+        std.debug.print("Frame index: {d}, waiting for frame: {d}\n", .{ frame_index, wait_frame });
+        if (frame_fence != null) _ = nri.core.Wait.?(frame_fence, 1);
+        swapchain.acquireNextImage(frame_index) catch |err| {
             if (err == error.SwapchainOutOfDate) {
                 std.debug.print("Swapchain out of date, recreating...\n", .{});
                 // Wait for device idle or all fences before recreating
@@ -47,6 +57,7 @@ pub fn main_loop(
                 swapchain.* = try swapchain_mod.Swapchain.init(
                     nri,
                     swapchain.device,
+                    swapchain.graphics_queue,
                     swapchain.swapchain,
                     frame_fence,
                     allocator,
@@ -61,7 +72,7 @@ pub fn main_loop(
             std.debug.print("acquireNextImage failed: {any}\n", .{err});
             return err;
         };
-        try swapchain.record_and_submit(raytracing, 0, image_index);
+        try swapchain.record_and_submit(raytracing, &frame_index);
         try swapchain.present();
     }
     if (frame_fence != null) _ = nri.core.Wait.?(frame_fence, 1);

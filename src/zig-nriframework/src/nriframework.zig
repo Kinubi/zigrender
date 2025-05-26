@@ -234,29 +234,41 @@ pub fn createDevice(adapter_index: u32, enable_api_validation: bool, enable_nri_
     return device.?;
 }
 
-pub fn createSwapChain(iface: *const c.NriSwapChainInterface, device: *c.NriDevice, win: *window_mod.Window, queue: ?*c.NriQueue, width: u32, height: u32, format: u32, vsync: u32) !*c.NriSwapChain {
-    // Ensure win.handle is valid and surface is not null
+pub fn createSwapChain(
+    iface: *const c.NriSwapChainInterface,
+    device: *c.NriDevice,
+    win: *window_mod.Window,
+    queue: ?*c.NriQueue,
+    width: u32,
+    height: u32,
+    format: u32,
+    vsync: u32, // ignored, always use FIFO
+) !*c.NriSwapChain {
     if (win.handle == null) return error.InvalidWindowHandle;
-
-    // Convert Zig NRIWindow to C NriWindow
     var c_window: c.struct_NriWindow = undefined;
     c_window.wayland.display = win.nri_window.display;
     c_window.wayland.surface = win.nri_window.surface;
-
+    var queue_frame_count: u32 = 2; // Default to 2 frames in flight
+    if (vsync == 0) {
+        queue_frame_count = 2;
+    } else {
+        queue_frame_count = 3;
+    }
     var swapChainDesc = c.NriSwapChainDesc{
         .window = c_window,
         .queue = queue,
         .width = @intCast(width),
         .height = @intCast(height),
-        .verticalSyncInterval = @intCast(vsync),
+        .verticalSyncInterval = @intCast(vsync), // Always use FIFO present mode for robust support
         .format = @intCast(format),
         .textureNum = 3,
-        .queuedFrameNum = 2,
+        .queuedFrameNum = @intCast(queue_frame_count),
+        .waitable = false,
+        .allowLowLatency = false,
     };
     var swapChain: ?*c.NriSwapChain = null;
     if (iface.CreateSwapChain.?(device, &swapChainDesc, &swapChain) != c.NriResult_SUCCESS or swapChain == null)
         return error.NRISwapChainCreationFailed;
-
     return swapChain.?;
 }
 
@@ -291,4 +303,9 @@ pub fn queuePresent(
 ) !void {
     if (swapchain.QueuePresent.?(swap_chain, release_semaphore) != c.NriResult_SUCCESS)
         return error.NRIQueuePresentFailed;
+}
+
+pub fn getQueuedFrameNum(vsync_enabled: bool) u32 {
+    // Match NRIFramework: 2 for vsync, 3 for no vsync (triple buffering)
+    return if (vsync_enabled) 2 else 3;
 }

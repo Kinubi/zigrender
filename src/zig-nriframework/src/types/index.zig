@@ -57,10 +57,9 @@ pub const uint2 = struct {
 pub const SwapChainTexture = struct {
     acquireSemaphore: ?*nriframework.c.NriFence,
     releaseSemaphore: ?*nriframework.c.NriFence,
-
-    texture: ?*Texture,
-    colorAttachment: ?*Descriptor,
-    attachmentFormat: Format,
+    texture: ?*nriframework.c.NriTexture,
+    colorAttachment: ?*nriframework.c.NriDescriptor,
+    attachmentFormat: nriframework.c.NriFormat,
     // Optionally, track last known layout for this image if needed
 };
 

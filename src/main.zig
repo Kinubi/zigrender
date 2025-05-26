@@ -17,7 +17,7 @@ pub fn main() !void {
     const nri_device = try nriframework.createDevice(0, false, false);
     var nri: nriframework.NRIInterface = undefined;
     try nriframework.getInterfaces(nri_device, &nri);
-    const nri_queue = try nriframework.getQueue(&nri.core, nri_device, 0, 0);
+    const nri_queue = try nriframework.getQueue(&nri.core, nri_device, nriframework.c.NriQueueType_GRAPHICS, 0);
 
     // Create a frame fence for CPU-GPU sync (must not be null!)
     var frame_fence: ?*nriframework.c.NriFence = null;
@@ -43,35 +43,32 @@ pub fn main() !void {
     var swapchain = try swapchain_mod.Swapchain.init(
         nri,
         nri_device,
+        nri_queue, // pass the graphics queue
         swapchain_ptr,
         frame_fence,
         allocator,
     );
 
     // Initialize Raytracing
-    var queued_frames: [2]types.QueuedFrame = .{ .{}, .{} };
-    var raytracing = raytracing_mod.Raytracing{
-        .allocator = allocator,
-        .device = nri_device,
-        .nri = nri,
-        .queue = nri_queue,
-        .swapchain = swapchain.swapchain,
-        .frame_fence = frame_fence,
-        .swapchain_textures = swapchain.textures,
-        .frames = queued_frames[0..],
-    };
-    try raytracing.init(
+    // Get vsync status (verticalSyncInterval) from swapchain or config
+    const vsync_enabled = true; // TODO: query from config or swapchain if dynamic
+    const queued_frame_num = nriframework.getQueuedFrameNum(vsync_enabled);
+    var queued_frames = try allocator.alloc(types.QueuedFrame, queued_frame_num);
+    for (queued_frames) |*qf| qf.* = .{};
+    _ = &queued_frames; // Mark as used to avoid 'never mutated' warning
+    const rgen_spv = @embedFile("shaders/RayTracingTriangle.rgen.hlsl.spv");
+    const rmiss_spv = @embedFile("shaders/RayTracingTriangle.rmiss.hlsl.spv");
+    const rchit_spv = @embedFile("shaders/RayTracingTriangle.rchit.hlsl.spv");
+    // Construct Raytracing only via init, and use the returned value
+    var raytracing = try raytracing_mod.Raytracing.init(
         allocator,
-        nri_device,
-        nri,
-        nri_queue,
-        swapchain.swapchain,
+        &swapchain, // pass the abstracted Swapchain
         frame_fence,
         swapchain.textures,
-        queued_frames[0..],
-        @embedFile("shaders/RayTracingTriangle.rgen.hlsl.spv"),
-        @embedFile("shaders/RayTracingTriangle.rmiss.hlsl.spv"),
-        @embedFile("shaders/RayTracingTriangle.rchit.hlsl.spv"),
+        queued_frames,
+        rgen_spv,
+        rmiss_spv,
+        rchit_spv,
     );
     // You may need to call create_blas_tlas with your scene's instance array here
 
